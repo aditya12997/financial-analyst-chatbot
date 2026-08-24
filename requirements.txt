@@ -1,0 +1,10 @@
+streamlit
+truststore
+python-dotenv
+certifi
+curl_cffi
+yfinance
+matplotlib
+langchain-core
+langchain-groq
+langgraph
