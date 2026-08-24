@@ -1,9 +1,5 @@
 import streamlit as st
 import re
-
-def strip_markdown_images(text: str) -> str:
-    return re.sub(r'!\[.*?\]\(.*?\)', '', text)
-
 import os
 
 import truststore
@@ -43,6 +39,10 @@ from langchain_core.messages import AnyMessage, SystemMessage, AIMessage
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 from typing import Annotated
+
+
+def strip_markdown_images(text: str) -> str:
+    return re.sub(r'!\[.*?\]\(.*?\)', '', text)
 
 
 @tool
@@ -91,11 +91,14 @@ SYSTEM_PROMPT = (
     'you do not need to embed it.'
 )
 
+
 class State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
 
+
 def tool_calling_llm(state):
     return {'messages': [llm_with_tools.invoke([SystemMessage(content=SYSTEM_PROMPT)] + state['messages'])]}
+
 
 builder = StateGraph(State)
 builder.add_node('tool_calling_llm', tool_calling_llm)
@@ -105,8 +108,57 @@ builder.add_conditional_edges('tool_calling_llm', tools_condition)
 builder.add_edge('tools', 'tool_calling_llm')
 financial_bot = builder.compile(checkpointer=InMemorySaver())
 
-st.set_page_config(page_title='Financial Analyst Chatbot', layout='wide')
-st.title('Financial Analyst Chatbot')
+st.set_page_config(
+    page_title='Financial Analyst Chatbot',
+    page_icon='📈',
+    layout='wide',
+)
+
+# ---------------------------------------------------------------------------
+# Sidebar: intro, how to use it, credit
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("### 📈 Financial Analyst Chatbot")
+    st.markdown(
+        "A chat assistant that answers questions about stocks using **live "
+        "data**, not guesses. Ask for a price, a chart, or how a stock has "
+        "been trending, and it calls real tools to find out before answering."
+    )
+
+    st.markdown("---")
+    st.markdown("**What it can do**")
+    st.markdown(
+        "- Look up a stock's current price and daily change\n"
+        "- Generate a price history chart for a chosen period\n"
+        "- Hold a short back-and-forth conversation with context"
+    )
+
+    st.markdown("**Try asking**")
+    st.markdown(
+        "- *What's Tesla's stock price right now?*\n"
+        "- *Show me a 6 month chart for Nvidia*\n"
+        "- *How has Apple been doing this year?*"
+    )
+
+    st.markdown("---")
+    st.caption(
+        "This is a demo built for learning and portfolio purposes. It is "
+        "general information, not financial advice. Runs on a free API tier, "
+        "so it may briefly rate-limit if used heavily."
+    )
+
+    st.markdown("---")
+    st.markdown("Built by **Aditya Gavali** (AG)")
+    st.markdown(
+        "[GitHub](https://github.com/aditya12997) · "
+        "[LinkedIn](https://www.linkedin.com/in/aditya12997)"
+    )
+
+# ---------------------------------------------------------------------------
+# Main area
+# ---------------------------------------------------------------------------
+st.title('📈 Financial Analyst Chatbot')
+st.caption('Live stock prices and charts, powered by LangGraph and Groq. Ask a question below to get started.')
 
 if 'messages' not in st.session_state:
     st.session_state.messages = []
@@ -114,6 +166,13 @@ if 'messages' not in st.session_state:
 chat_col, chart_col = st.columns([2, 1])
 
 with chat_col:
+    if not st.session_state.messages:
+        st.info(
+            "👋 Ask me about any public stock, for example: "
+            "*\"What's the current price of Microsoft?\"* or "
+            "*\"Show me a chart for Amazon over the last year.\"*"
+        )
+
     for msg in st.session_state.messages:
         with st.chat_message(msg['role']):
             st.markdown(msg['content'])
@@ -126,29 +185,30 @@ with chat_col:
             st.markdown(user_input)
 
         config = {'configurable': {'thread_id': 'streamlit-session'}}
-        try:
-            result = financial_bot.invoke(
-                {'messages': [{'role': 'user', 'content': user_input}]}, config=config
-            )
-            answer = strip_markdown_images(result['messages'][-1].content)
+        with st.spinner('Looking that up...'):
+            try:
+                result = financial_bot.invoke(
+                    {'messages': [{'role': 'user', 'content': user_input}]}, config=config
+                )
+                answer = strip_markdown_images(result['messages'][-1].content)
 
-            for m in result['messages']:
-                if m.type == 'tool' and m.name == 'plot_stock_chart':
-                    found = re.search(r'charts/[\w\.]+\.png', m.content)
-                    if found:
-                        st.session_state['last_chart'] = found.group()
-        except Exception as e:
-            answer = (
-                "This demo runs on a free API tier and just hit its rate limit. "
-                "Please wait about 20 seconds and try again."
-            )
+                for m in result['messages']:
+                    if m.type == 'tool' and m.name == 'plot_stock_chart':
+                        found = re.search(r'charts/[\w\.]+\.png', m.content)
+                        if found:
+                            st.session_state['last_chart'] = found.group()
+            except Exception as e:
+                answer = (
+                    "This demo runs on a free API tier and just hit its rate limit. "
+                    "Please wait about 20 seconds and try again."
+                )
 
         st.session_state.messages.append({'role': 'assistant', 'content': answer})
         with st.chat_message('assistant'):
             st.markdown(answer)
 
 with chart_col:
-    st.subheader('Chart')
+    st.subheader('📊 Chart')
     if st.session_state.get('last_chart'):
         st.image(st.session_state['last_chart'])
     else:
