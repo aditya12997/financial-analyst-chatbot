@@ -1,6 +1,7 @@
 import streamlit as st
 import re
 import os
+import uuid
 
 import truststore
 truststore.inject_into_ssl()
@@ -79,8 +80,6 @@ def plot_stock_chart(ticker: str, period: str = '3mo') -> str:
 
 
 tools = [get_stock_quote, plot_stock_chart]
-llm = ChatGroq(model='openai/gpt-oss-120b', temperature=0.2)
-llm_with_tools = llm.bind_tools(tools)
 
 SYSTEM_PROMPT = (
     'You are a financial assistant. Use tools for real prices and charts. '
@@ -96,17 +95,31 @@ class State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
 
 
-def tool_calling_llm(state):
-    return {'messages': [llm_with_tools.invoke([SystemMessage(content=SYSTEM_PROMPT)] + state['messages'])]}
+@st.cache_resource
+def build_financial_bot():
+    """
+    Build the graph exactly once per running app process, not on every
+    Streamlit rerun. This is what makes the InMemorySaver checkpointer
+    actually persist conversation history between messages, instead of
+    being recreated (and wiped) every time the script reruns.
+    """
+    llm = ChatGroq(model='openai/gpt-oss-120b', temperature=0.2)
+    llm_with_tools = llm.bind_tools(tools)
+
+    def tool_calling_llm(state):
+        return {'messages': [llm_with_tools.invoke([SystemMessage(content=SYSTEM_PROMPT)] + state['messages'])]}
+
+    builder = StateGraph(State)
+    builder.add_node('tool_calling_llm', tool_calling_llm)
+    builder.add_node('tools', ToolNode(tools))
+    builder.add_edge(START, 'tool_calling_llm')
+    builder.add_conditional_edges('tool_calling_llm', tools_condition)
+    builder.add_edge('tools', 'tool_calling_llm')
+
+    return builder.compile(checkpointer=InMemorySaver())
 
 
-builder = StateGraph(State)
-builder.add_node('tool_calling_llm', tool_calling_llm)
-builder.add_node('tools', ToolNode(tools))
-builder.add_edge(START, 'tool_calling_llm')
-builder.add_conditional_edges('tool_calling_llm', tools_condition)
-builder.add_edge('tools', 'tool_calling_llm')
-financial_bot = builder.compile(checkpointer=InMemorySaver())
+financial_bot = build_financial_bot()
 
 st.set_page_config(
     page_title='Financial Analyst Chatbot',
@@ -163,6 +176,11 @@ st.caption('Live stock prices and charts, powered by LangGraph and Groq. Ask a q
 if 'messages' not in st.session_state:
     st.session_state.messages = []
 
+if 'thread_id' not in st.session_state:
+    # A unique id per browser session, so each visitor gets their own
+    # conversation instead of everyone sharing one thread.
+    st.session_state.thread_id = str(uuid.uuid4())
+
 chat_col, chart_col = st.columns([2, 1])
 
 with chat_col:
@@ -184,7 +202,7 @@ with chat_col:
         with st.chat_message('user'):
             st.markdown(user_input)
 
-        config = {'configurable': {'thread_id': 'streamlit-session'}}
+        config = {'configurable': {'thread_id': st.session_state.thread_id}}
         with st.spinner('Looking that up...'):
             try:
                 result = financial_bot.invoke(
